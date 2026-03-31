@@ -22,7 +22,11 @@ A macOS menu bar app that detects physical taps on your Apple Silicon MacBook an
 
 1. Download the latest `.dmg` from [Releases](https://github.com/Deveshb15/TapLauncher/releases)
 2. Open the DMG and drag `TapLauncher.app` to Applications
-3. Run from terminal (requires sudo):
+3. Remove the quarantine flag (app is not code-signed):
+   ```bash
+   sudo xattr -cr /Applications/TapLauncher.app
+   ```
+4. Run from terminal (requires sudo for accelerometer access):
    ```bash
    sudo /Applications/TapLauncher.app/Contents/MacOS/TapLauncher
    ```
