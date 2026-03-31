@@ -5,3 +5,5 @@ TapLauncher.app/
 xcuserdata/
 DerivedData/
 .DS_Store
+*.dmg
+.dmg-staging/

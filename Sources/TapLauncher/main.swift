@@ -8,7 +8,14 @@ guard geteuid() == 0 else {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory) // Menu bar only, no Dock icon
+
+// First launch: show as regular app with Dock icon so settings window is prominent.
+// Subsequent launches: menu bar only.
+if Settings.shared.config.hasLaunchedBefore {
+    app.setActivationPolicy(.accessory)
+} else {
+    app.setActivationPolicy(.regular)
+}
 
 let delegate = AppDelegate()
 app.delegate = delegate

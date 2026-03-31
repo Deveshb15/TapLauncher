@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var accelerometer: Accelerometer!
     private var tapDetector: TapDetector!
@@ -16,14 +16,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var soundMenuItem: NSMenuItem!
     private var enabledMenuItem: NSMenuItem!
 
+    // Settings window controls (stored instead of tag-based lookup)
+    private var singleTapIconView: NSImageView!
+    private var singleTapNameLabel: NSTextField!
+    private var singleTapPath: String?
+    private var doubleTapIconView: NSImageView!
+    private var doubleTapNameLabel: NSTextField!
+    private var doubleTapPath: String?
+    private var soundModePopup: NSPopUpButton!
+    private var customFolderField: NSTextField!
+    private var ampSlider: NSSlider!
+    private var ampValueLabel: NSTextField!
+    private var tapWindowSlider: NSSlider!
+    private var tapWindowValueLabel: NSTextField!
+    private var cooldownSlider: NSSlider!
+    private var cooldownValueLabel: NSTextField!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupComponents()
         setupMenuBar()
         startAccelerometer()
 
-        // First launch: open settings if no apps are configured yet
+        // First launch or no apps configured: open settings
         let config = Settings.shared.config
-        if config.singleTapAppPath == nil && config.doubleTapAppPath == nil {
+        if !config.hasLaunchedBefore || (config.singleTapAppPath == nil && config.doubleTapAppPath == nil) {
             DispatchQueue.main.async { [weak self] in
                 self?.openSettings()
             }
@@ -40,14 +56,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appLauncher = AppLauncher()
         audioPlayer = AudioPlayer()
 
-        // Apply settings
         tapDetector.minAmplitude = config.minAmplitude
         tapDetector.doubleTapWindow = config.doubleTapWindow
         tapDetector.cooldown = config.cooldown
         audioPlayer.soundMode = config.soundMode
         audioPlayer.customAudioPath = config.customAudioPath
 
-        // Wire pipeline
         accelerometer.onSample = { [weak self] x, y, z in
             guard let self = self, Settings.shared.config.isEnabled else { return }
             self.tapDetector.processSample(x: x, y: y, z: z)
@@ -55,14 +69,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         tapDetector.onTap = { [weak self] event in
             guard let self = self else { return }
-            let tapType: String
             switch event {
             case .singleTap(let amp):
-                tapType = "Single tap (amp: \(String(format: "%.3f", amp)))"
+                print("Single tap (amp: \(String(format: "%.3f", amp)))")
             case .doubleTap(let amp):
-                tapType = "Double tap (amp: \(String(format: "%.3f", amp)))"
+                print("Double tap (amp: \(String(format: "%.3f", amp)))")
             }
-            print(tapType)
 
             self.appLauncher.handle(event: event)
             self.audioPlayer.playForTap(amplitude: {
@@ -99,54 +111,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         singleTapMenuItem = NSMenuItem(
             title: "Single Tap \u{2192} \(Settings.shared.appName(for: Settings.shared.config.singleTapAppPath))",
-            action: nil,
-            keyEquivalent: ""
+            action: nil, keyEquivalent: ""
         )
         singleTapMenuItem.isEnabled = false
         menu.addItem(singleTapMenuItem)
 
         doubleTapMenuItem = NSMenuItem(
             title: "Double Tap \u{2192} \(Settings.shared.appName(for: Settings.shared.config.doubleTapAppPath))",
-            action: nil,
-            keyEquivalent: ""
+            action: nil, keyEquivalent: ""
         )
         doubleTapMenuItem.isEnabled = false
         menu.addItem(doubleTapMenuItem)
 
         soundMenuItem = NSMenuItem(
             title: "Sound: \(Settings.shared.config.soundMode.rawValue.capitalized)",
-            action: nil,
-            keyEquivalent: ""
+            action: nil, keyEquivalent: ""
         )
         soundMenuItem.isEnabled = false
         menu.addItem(soundMenuItem)
 
         menu.addItem(.separator())
 
-        enabledMenuItem = NSMenuItem(
-            title: "Enabled",
-            action: #selector(toggleEnabled),
-            keyEquivalent: "e"
-        )
+        enabledMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "e")
         enabledMenuItem.target = self
         enabledMenuItem.state = Settings.shared.config.isEnabled ? .on : .off
         menu.addItem(enabledMenuItem)
 
-        let settingsItem = NSMenuItem(
-            title: "Settings...",
-            action: #selector(openSettings),
-            keyEquivalent: ","
-        )
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(
-            title: "Quit",
-            action: #selector(quit),
-            keyEquivalent: "q"
-        )
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -181,224 +178,360 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if let window = settingsWindow {
             window.makeKeyAndOrderFront(nil)
+            NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
         let window = createSettingsWindow()
         settingsWindow = window
+        window.delegate = self
         window.makeKeyAndOrderFront(nil)
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowWillClose(_ notification: Notification) {
+        // Mark first launch as done
+        if !Settings.shared.config.hasLaunchedBefore {
+            Settings.shared.config.hasLaunchedBefore = true
+            Settings.shared.save()
+        }
+        // Return to menu-bar-only mode
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     // MARK: - Settings Window
 
     private func createSettingsWindow() -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
+            styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "TapLauncher Settings"
+        window.title = "TapLauncher"
         window.center()
         window.isReleasedWhenClosed = false
-
-        let contentView = NSView(frame: window.contentView!.bounds)
-        contentView.autoresizingMask = [.width, .height]
-        window.contentView = contentView
-
-        var y: CGFloat = 420
-        let leftMargin: CGFloat = 20
-        let labelWidth: CGFloat = 120.0
-        let fieldWidth: CGFloat = 220.0
+        window.minSize = NSSize(width: 600, height: 520)
 
         let config = Settings.shared.config
+        singleTapPath = config.singleTapAppPath
+        doubleTapPath = config.doubleTapAppPath
 
-        // --- Tap Actions ---
-        y -= 30
-        addSectionLabel(to: contentView, text: "Tap Actions", y: y)
+        // Main vertical stack
+        let mainStack = NSStackView()
+        mainStack.orientation = .vertical
+        mainStack.alignment = .leading
+        mainStack.spacing = 16
+        mainStack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 20, right: 24)
 
-        y -= 30
-        addLabel(to: contentView, text: "Single Tap:", x: leftMargin, y: y)
-        let singleTapField = addTextField(
-            to: contentView,
-            x: leftMargin + labelWidth,
-            y: y,
-            width: fieldWidth,
-            value: config.singleTapAppPath ?? ""
+        // --- Tap Actions Section ---
+        let tapBox = makeSection(title: "Tap Actions")
+        let tapContent = NSStackView()
+        tapContent.orientation = .vertical
+        tapContent.spacing = 12
+
+        let singleRow = makeAppRow(
+            label: "Single Tap",
+            appPath: config.singleTapAppPath,
+            iconView: &singleTapIconView,
+            nameLabel: &singleTapNameLabel,
+            action: #selector(chooseSingleTapApp)
         )
-        singleTapField.tag = 1
-        addButton(to: contentView, title: "Choose...", x: leftMargin + labelWidth + fieldWidth + 8, y: y) { [weak self] in
-            self?.chooseApp(for: singleTapField)
-        }
-
-        y -= 30
-        addLabel(to: contentView, text: "Double Tap:", x: leftMargin, y: y)
-        let doubleTapField = addTextField(
-            to: contentView,
-            x: leftMargin + labelWidth,
-            y: y,
-            width: fieldWidth,
-            value: config.doubleTapAppPath ?? ""
+        let doubleRow = makeAppRow(
+            label: "Double Tap",
+            appPath: config.doubleTapAppPath,
+            iconView: &doubleTapIconView,
+            nameLabel: &doubleTapNameLabel,
+            action: #selector(chooseDoubleTapApp)
         )
-        doubleTapField.tag = 2
-        addButton(to: contentView, title: "Choose...", x: leftMargin + labelWidth + fieldWidth + 8, y: y) { [weak self] in
-            self?.chooseApp(for: doubleTapField)
+        tapContent.addArrangedSubview(singleRow)
+        tapContent.addArrangedSubview(doubleRow)
+        tapBox.contentView = tapContent
+        mainStack.addArrangedSubview(tapBox)
+
+        // --- Sound Mode Section ---
+        let soundBox = makeSection(title: "Sound Mode")
+        let soundContent = NSStackView()
+        soundContent.orientation = .vertical
+        soundContent.spacing = 10
+
+        let modeRow = NSStackView()
+        modeRow.orientation = .horizontal
+        modeRow.spacing = 8
+        let modeLabel = NSTextField(labelWithString: "Mode:")
+        modeLabel.font = .systemFont(ofSize: 13)
+        modeLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        soundModePopup = NSPopUpButton(frame: .zero)
+        for mode in SoundMode.allCases {
+            soundModePopup.addItem(withTitle: mode.rawValue.capitalized)
         }
+        soundModePopup.selectItem(withTitle: config.soundMode.rawValue.capitalized)
+        soundModePopup.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        modeRow.addArrangedSubview(modeLabel)
+        modeRow.addArrangedSubview(soundModePopup)
+        modeRow.addArrangedSubview(NSView()) // spacer
+        soundContent.addArrangedSubview(modeRow)
 
-        // --- Sound Mode ---
-        y -= 40
-        addSectionLabel(to: contentView, text: "Sound Mode", y: y)
+        let customRow = NSStackView()
+        customRow.orientation = .horizontal
+        customRow.spacing = 8
+        let customLabel = NSTextField(labelWithString: "Custom folder:")
+        customLabel.font = .systemFont(ofSize: 13)
+        customLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        customFolderField = NSTextField(string: config.customAudioPath ?? "")
+        customFolderField.isEditable = true
+        customFolderField.isBezeled = true
+        customFolderField.bezelStyle = .roundedBezel
+        customFolderField.widthAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
+        let browseBtn = NSButton(title: "Browse...", target: self, action: #selector(browseCustomFolder))
+        browseBtn.bezelStyle = .rounded
+        customRow.addArrangedSubview(customLabel)
+        customRow.addArrangedSubview(customFolderField)
+        customRow.addArrangedSubview(browseBtn)
+        soundContent.addArrangedSubview(customRow)
 
-        y -= 30
-        let soundModes: [SoundMode] = [.pain, .sexy, .halo, .lizard, .custom, .none]
-        let popup = NSPopUpButton(frame: NSRect(x: leftMargin, y: y, width: 200, height: 25))
-        for mode in soundModes {
-            popup.addItem(withTitle: mode.rawValue.capitalized)
-        }
-        popup.selectItem(withTitle: config.soundMode.rawValue.capitalized)
-        popup.tag = 10
-        contentView.addSubview(popup)
+        soundBox.contentView = soundContent
+        mainStack.addArrangedSubview(soundBox)
 
-        y -= 30
-        addLabel(to: contentView, text: "Custom folder:", x: leftMargin, y: y)
-        let customField = addTextField(
-            to: contentView,
-            x: leftMargin + labelWidth,
-            y: y,
-            width: fieldWidth,
-            value: config.customAudioPath ?? ""
-        )
-        customField.tag = 3
-        addButton(to: contentView, title: "Browse...", x: leftMargin + labelWidth + fieldWidth + 8, y: y) { [weak self] in
-            self?.chooseDirectory(for: customField)
-        }
+        // --- Sensitivity Section ---
+        let sensBox = makeSection(title: "Sensitivity")
+        let sensContent = NSStackView()
+        sensContent.orientation = .vertical
+        sensContent.spacing = 10
 
-        // --- Sensitivity ---
-        y -= 40
-        addSectionLabel(to: contentView, text: "Sensitivity", y: y)
-
-        y -= 30
-        addLabel(to: contentView, text: "Amplitude:", x: leftMargin, y: y)
-        let ampSlider = NSSlider(
+        let ampRow = makeSliderRow(
+            label: "Sensitivity",
             value: config.minAmplitude,
-            minValue: 0.01,
-            maxValue: 0.3,
-            target: nil,
-            action: nil
+            min: 0.01, max: 0.3,
+            displayValue: String(format: "%.2f", config.minAmplitude),
+            slider: &ampSlider,
+            valueLabel: &ampValueLabel,
+            action: #selector(sliderChanged(_:))
         )
-        ampSlider.frame = NSRect(x: leftMargin + labelWidth, y: y, width: 200, height: 20)
-        ampSlider.tag = 20
-        contentView.addSubview(ampSlider)
-        let ampLabel = addValueLabel(to: contentView, x: leftMargin + labelWidth + 210, y: y, value: String(format: "%.2f", config.minAmplitude))
-        ampLabel.tag = 21
-        ampSlider.target = self
-        ampSlider.action = #selector(sliderChanged(_:))
-
-        y -= 30
-        addLabel(to: contentView, text: "Tap window:", x: leftMargin, y: y)
-        let tapWindowSlider = NSSlider(
+        let tapWinRow = makeSliderRow(
+            label: "Tap window",
             value: config.doubleTapWindow * 1000,
-            minValue: 200,
-            maxValue: 800,
-            target: nil,
-            action: nil
+            min: 200, max: 800,
+            displayValue: "\(Int(config.doubleTapWindow * 1000))ms",
+            slider: &tapWindowSlider,
+            valueLabel: &tapWindowValueLabel,
+            action: #selector(sliderChanged(_:))
         )
-        tapWindowSlider.frame = NSRect(x: leftMargin + labelWidth, y: y, width: 200, height: 20)
-        tapWindowSlider.tag = 30
-        contentView.addSubview(tapWindowSlider)
-        let twLabel = addValueLabel(to: contentView, x: leftMargin + labelWidth + 210, y: y, value: "\(Int(config.doubleTapWindow * 1000))ms")
-        twLabel.tag = 31
-        tapWindowSlider.target = self
-        tapWindowSlider.action = #selector(sliderChanged(_:))
-
-        y -= 30
-        addLabel(to: contentView, text: "Cooldown:", x: leftMargin, y: y)
-        let cooldownSlider = NSSlider(
+        let cdRow = makeSliderRow(
+            label: "Cooldown",
             value: config.cooldown * 1000,
-            minValue: 300,
-            maxValue: 2000,
-            target: nil,
-            action: nil
+            min: 300, max: 2000,
+            displayValue: "\(Int(config.cooldown * 1000))ms",
+            slider: &cooldownSlider,
+            valueLabel: &cooldownValueLabel,
+            action: #selector(sliderChanged(_:))
         )
-        cooldownSlider.frame = NSRect(x: leftMargin + labelWidth, y: y, width: 200, height: 20)
-        cooldownSlider.tag = 40
-        contentView.addSubview(cooldownSlider)
-        let cdLabel = addValueLabel(to: contentView, x: leftMargin + labelWidth + 210, y: y, value: "\(Int(config.cooldown * 1000))ms")
-        cdLabel.tag = 41
-        cooldownSlider.target = self
-        cooldownSlider.action = #selector(sliderChanged(_:))
+        sensContent.addArrangedSubview(ampRow)
+        sensContent.addArrangedSubview(tapWinRow)
+        sensContent.addArrangedSubview(cdRow)
+        sensBox.contentView = sensContent
+        mainStack.addArrangedSubview(sensBox)
 
-        // --- Save / Cancel ---
-        y -= 50
-        let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings(_:)))
-        saveButton.frame = NSRect(x: 280, y: y, width: 80, height: 30)
-        saveButton.bezelStyle = .rounded
-        saveButton.keyEquivalent = "\r"
-        contentView.addSubview(saveButton)
+        // --- Buttons ---
+        let buttonRow = NSStackView()
+        buttonRow.orientation = .horizontal
+        buttonRow.spacing = 12
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let cancelBtn = NSButton(title: "Cancel", target: self, action: #selector(cancelSettings))
+        cancelBtn.bezelStyle = .rounded
+        cancelBtn.keyEquivalent = "\u{1b}"
+        let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
+        saveBtn.bezelStyle = .rounded
+        saveBtn.keyEquivalent = "\r"
+        buttonRow.addArrangedSubview(spacer)
+        buttonRow.addArrangedSubview(cancelBtn)
+        buttonRow.addArrangedSubview(saveBtn)
+        mainStack.addArrangedSubview(buttonRow)
 
-        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelSettings(_:)))
-        cancelButton.frame = NSRect(x: 370, y: y, width: 80, height: 30)
-        cancelButton.bezelStyle = .rounded
-        cancelButton.keyEquivalent = "\u{1b}"
-        contentView.addSubview(cancelButton)
+        // Layout
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+        window.contentView!.addSubview(mainStack)
+        NSLayoutConstraint.activate([
+            mainStack.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
+            mainStack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
+            mainStack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
+            mainStack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor),
+        ])
+
+        // Make sections fill width
+        for view in mainStack.arrangedSubviews {
+            if view is NSBox || view is NSStackView {
+                view.widthAnchor.constraint(equalTo: mainStack.widthAnchor, constant: -48).isActive = true
+            }
+        }
 
         return window
     }
 
+    // MARK: - Section Builder
+
+    private func makeSection(title: String) -> NSBox {
+        let box = NSBox()
+        box.title = title
+        box.titleFont = .boldSystemFont(ofSize: 13)
+        box.boxType = .primary
+        box.contentViewMargins = NSSize(width: 12, height: 12)
+        return box
+    }
+
+    // MARK: - App Row Builder
+
+    private func makeAppRow(
+        label: String,
+        appPath: String?,
+        iconView: inout NSImageView!,
+        nameLabel: inout NSTextField!,
+        action: Selector
+    ) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 10
+        row.alignment = .centerY
+
+        let tapLabel = NSTextField(labelWithString: label)
+        tapLabel.font = .systemFont(ofSize: 13)
+        tapLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+
+        let icon = NSImageView()
+        icon.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        iconView = icon
+
+        let name = NSTextField(labelWithString: "Not Set")
+        name.font = .systemFont(ofSize: 13)
+        name.lineBreakMode = .byTruncatingTail
+        name.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        nameLabel = name
+
+        // Set initial state
+        updateAppDisplay(iconView: icon, nameLabel: name, path: appPath)
+
+        let chooseBtn = NSButton(title: "Choose...", target: self, action: action)
+        chooseBtn.bezelStyle = .rounded
+
+        row.addArrangedSubview(tapLabel)
+        row.addArrangedSubview(icon)
+        row.addArrangedSubview(name)
+        row.addArrangedSubview(chooseBtn)
+
+        return row
+    }
+
+    private func updateAppDisplay(iconView: NSImageView, nameLabel: NSTextField, path: String?) {
+        guard let path = path, FileManager.default.fileExists(atPath: path) else {
+            iconView.image = NSImage(systemSymbolName: "app.dashed", accessibilityDescription: "No app")
+            nameLabel.stringValue = "Not Set"
+            nameLabel.textColor = .secondaryLabelColor
+            return
+        }
+        iconView.image = NSWorkspace.shared.icon(forFile: path)
+        nameLabel.stringValue = Settings.shared.appName(for: path)
+        nameLabel.textColor = .labelColor
+    }
+
+    // MARK: - Slider Row Builder
+
+    private func makeSliderRow(
+        label: String,
+        value: Double,
+        min: Double,
+        max: Double,
+        displayValue: String,
+        slider: inout NSSlider!,
+        valueLabel: inout NSTextField!,
+        action: Selector
+    ) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 10
+        row.alignment = .centerY
+
+        let textLabel = NSTextField(labelWithString: label)
+        textLabel.font = .systemFont(ofSize: 13)
+        textLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+
+        let sl = NSSlider(value: value, minValue: min, maxValue: max, target: self, action: action)
+        sl.widthAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
+        slider = sl
+
+        let vl = NSTextField(labelWithString: displayValue)
+        vl.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        vl.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        vl.alignment = .right
+        valueLabel = vl
+
+        row.addArrangedSubview(textLabel)
+        row.addArrangedSubview(sl)
+        row.addArrangedSubview(vl)
+
+        return row
+    }
+
+    // MARK: - Settings Actions
+
     @objc private func sliderChanged(_ sender: NSSlider) {
-        guard let contentView = settingsWindow?.contentView else { return }
-        switch sender.tag {
-        case 20: // amplitude
-            if let label = contentView.viewWithTag(21) as? NSTextField {
-                label.stringValue = String(format: "%.2f", sender.doubleValue)
-            }
-        case 30: // tap window
-            if let label = contentView.viewWithTag(31) as? NSTextField {
-                label.stringValue = "\(Int(sender.doubleValue))ms"
-            }
-        case 40: // cooldown
-            if let label = contentView.viewWithTag(41) as? NSTextField {
-                label.stringValue = "\(Int(sender.doubleValue))ms"
-            }
-        default:
-            break
+        if sender === ampSlider {
+            ampValueLabel.stringValue = String(format: "%.2f", sender.doubleValue)
+        } else if sender === tapWindowSlider {
+            tapWindowValueLabel.stringValue = "\(Int(sender.doubleValue))ms"
+        } else if sender === cooldownSlider {
+            cooldownValueLabel.stringValue = "\(Int(sender.doubleValue))ms"
         }
     }
 
-    @objc private func saveSettings(_ sender: Any) {
-        guard let contentView = settingsWindow?.contentView else { return }
+    @objc private func chooseSingleTapApp() {
+        if let path = chooseApp() {
+            singleTapPath = path
+            updateAppDisplay(iconView: singleTapIconView, nameLabel: singleTapNameLabel, path: path)
+        }
+    }
 
-        // Read fields
-        if let field = contentView.viewWithTag(1) as? NSTextField {
-            let path = field.stringValue.isEmpty ? nil : field.stringValue
-            Settings.shared.config.singleTapAppPath = path
+    @objc private func chooseDoubleTapApp() {
+        if let path = chooseApp() {
+            doubleTapPath = path
+            updateAppDisplay(iconView: doubleTapIconView, nameLabel: doubleTapNameLabel, path: path)
         }
-        if let field = contentView.viewWithTag(2) as? NSTextField {
-            let path = field.stringValue.isEmpty ? nil : field.stringValue
-            Settings.shared.config.doubleTapAppPath = path
+    }
+
+    @objc private func browseCustomFolder() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        if panel.runModal() == .OK, let url = panel.url {
+            customFolderField.stringValue = url.path
         }
-        if let field = contentView.viewWithTag(3) as? NSTextField {
-            let path = field.stringValue.isEmpty ? nil : field.stringValue
-            Settings.shared.config.customAudioPath = path
-        }
-        if let popup = contentView.viewWithTag(10) as? NSPopUpButton,
-           let title = popup.selectedItem?.title,
+    }
+
+    @objc private func saveSettings() {
+        Settings.shared.config.singleTapAppPath = singleTapPath
+        Settings.shared.config.doubleTapAppPath = doubleTapPath
+
+        if let title = soundModePopup.selectedItem?.title,
            let mode = SoundMode(rawValue: title.lowercased()) {
             Settings.shared.config.soundMode = mode
         }
-        if let slider = contentView.viewWithTag(20) as? NSSlider {
-            Settings.shared.config.minAmplitude = slider.doubleValue
-        }
-        if let slider = contentView.viewWithTag(30) as? NSSlider {
-            Settings.shared.config.doubleTapWindow = slider.doubleValue / 1000.0
-        }
-        if let slider = contentView.viewWithTag(40) as? NSSlider {
-            Settings.shared.config.cooldown = slider.doubleValue / 1000.0
-        }
 
-        // Apply to components
+        let customPath = customFolderField.stringValue
+        Settings.shared.config.customAudioPath = customPath.isEmpty ? nil : customPath
+        Settings.shared.config.minAmplitude = ampSlider.doubleValue
+        Settings.shared.config.doubleTapWindow = tapWindowSlider.doubleValue / 1000.0
+        Settings.shared.config.cooldown = cooldownSlider.doubleValue / 1000.0
+
+        // Apply to live components
         let config = Settings.shared.config
         tapDetector.minAmplitude = config.minAmplitude
         tapDetector.doubleTapWindow = config.doubleTapWindow
@@ -407,7 +540,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         audioPlayer.customAudioPath = config.customAudioPath
         audioPlayer.invalidateCache()
 
-        // Update menu
+        // Update menu bar
         singleTapMenuItem.title = "Single Tap \u{2192} \(Settings.shared.appName(for: config.singleTapAppPath))"
         doubleTapMenuItem.title = "Double Tap \u{2192} \(Settings.shared.appName(for: config.doubleTapAppPath))"
         soundMenuItem.title = "Sound: \(config.soundMode.rawValue.capitalized)"
@@ -416,92 +549,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.close()
     }
 
-    @objc private func cancelSettings(_ sender: Any) {
+    @objc private func cancelSettings() {
         settingsWindow?.close()
     }
 
-    // MARK: - File Choosers
+    // MARK: - File Chooser
 
-    private func chooseApp(for textField: NSTextField) {
+    private func chooseApp() -> String? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.application]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-
         if panel.runModal() == .OK, let url = panel.url {
-            textField.stringValue = url.path
+            return url.path
         }
-    }
-
-    private func chooseDirectory(for textField: NSTextField) {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-
-        if panel.runModal() == .OK, let url = panel.url {
-            textField.stringValue = url.path
-        }
-    }
-
-    // MARK: - View Helpers
-
-    private func addSectionLabel(to view: NSView, text: String, y: CGFloat) {
-        let label = NSTextField(labelWithString: text)
-        label.frame = NSRect(x: 20, y: y, width: 440, height: 20)
-        label.font = .boldSystemFont(ofSize: 13)
-        view.addSubview(label)
-    }
-
-    private func addLabel(to view: NSView, text: String, x: CGFloat, y: CGFloat) {
-        let label = NSTextField(labelWithString: text)
-        label.frame = NSRect(x: x, y: y, width: 120, height: 20)
-        label.alignment = .right
-        view.addSubview(label)
-    }
-
-    @discardableResult
-    private func addTextField(to view: NSView, x: CGFloat, y: CGFloat, width: CGFloat, value: String) -> NSTextField {
-        let field = NSTextField(string: value)
-        field.frame = NSRect(x: x, y: y, width: width, height: 22)
-        field.isEditable = true
-        field.isBezeled = true
-        field.bezelStyle = .roundedBezel
-        view.addSubview(field)
-        return field
-    }
-
-    @discardableResult
-    private func addValueLabel(to view: NSView, x: CGFloat, y: CGFloat, value: String) -> NSTextField {
-        let label = NSTextField(labelWithString: value)
-        label.frame = NSRect(x: x, y: y, width: 60, height: 20)
-        view.addSubview(label)
-        return label
-    }
-
-    private func addButton(to view: NSView, title: String, x: CGFloat, y: CGFloat, action: @escaping () -> Void) {
-        let button = CallbackButton(title: title, action: action)
-        button.frame = NSRect(x: x, y: y, width: 80, height: 22)
-        button.bezelStyle = .rounded
-        view.addSubview(button)
-    }
-}
-
-// Helper button that invokes a closure
-private class CallbackButton: NSButton {
-    private var callback: (() -> Void)?
-
-    convenience init(title: String, action: @escaping () -> Void) {
-        self.init(frame: .zero)
-        self.title = title
-        self.callback = action
-        self.target = self
-        self.action = #selector(buttonClicked)
-    }
-
-    @objc private func buttonClicked() {
-        callback?()
+        return nil
     }
 }

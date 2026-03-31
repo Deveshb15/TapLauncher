@@ -13,6 +13,7 @@ struct TapLauncherConfig: Codable {
     var doubleTapWindow: Double = 0.4
     var cooldown: Double = 0.75
     var isEnabled: Bool = true
+    var hasLaunchedBefore: Bool = false
 }
 
 class Settings {
