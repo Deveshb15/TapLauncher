@@ -259,35 +259,67 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let soundBox = makeSection(title: "Sound Mode")
         let soundContent = NSStackView()
         soundContent.orientation = .vertical
-        soundContent.spacing = 10
+        soundContent.spacing = 12
 
+        // Mode selector row with preview button
         let modeRow = NSStackView()
         modeRow.orientation = .horizontal
-        modeRow.spacing = 8
+        modeRow.spacing = 10
+        modeRow.alignment = .centerY
         let modeLabel = NSTextField(labelWithString: "Mode:")
         modeLabel.font = .systemFont(ofSize: 13)
-        modeLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        modeLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
         soundModePopup = NSPopUpButton(frame: .zero)
         for mode in SoundMode.allCases {
-            soundModePopup.addItem(withTitle: mode.rawValue.capitalized)
+            let title: String
+            let desc: String
+            switch mode {
+            case .pain:   title = "Pain";   desc = " — 10 protest sounds"
+            case .sexy:   title = "Sexy";   desc = " — 60 escalating clips"
+            case .halo:   title = "Halo";   desc = " — 9 death sounds"
+            case .lizard: title = "Lizard"; desc = " — escalating lizard"
+            case .custom: title = "Custom"; desc = " — your MP3s"
+            case .none:   title = "None";   desc = " — silent"
+            }
+            soundModePopup.addItem(withTitle: title + desc)
+            soundModePopup.lastItem?.representedObject = mode.rawValue
         }
-        soundModePopup.selectItem(withTitle: config.soundMode.rawValue.capitalized)
-        soundModePopup.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        // Select current mode
+        for item in soundModePopup.itemArray {
+            if item.representedObject as? String == config.soundMode.rawValue {
+                soundModePopup.select(item)
+                break
+            }
+        }
+        soundModePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
+
+        let previewBtn = NSButton(frame: .zero)
+        previewBtn.bezelStyle = .rounded
+        previewBtn.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Preview sound")
+        previewBtn.imagePosition = .imageLeading
+        previewBtn.title = " Preview"
+        previewBtn.target = self
+        previewBtn.action = #selector(previewSoundMode)
+
         modeRow.addArrangedSubview(modeLabel)
         modeRow.addArrangedSubview(soundModePopup)
+        modeRow.addArrangedSubview(previewBtn)
         modeRow.addArrangedSubview(NSView()) // spacer
         soundContent.addArrangedSubview(modeRow)
 
+        // Custom folder row
         let customRow = NSStackView()
         customRow.orientation = .horizontal
-        customRow.spacing = 8
+        customRow.spacing = 10
+        customRow.alignment = .centerY
         let customLabel = NSTextField(labelWithString: "Custom folder:")
         customLabel.font = .systemFont(ofSize: 13)
-        customLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        customLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
         customFolderField = NSTextField(string: config.customAudioPath ?? "")
         customFolderField.isEditable = true
         customFolderField.isBezeled = true
         customFolderField.bezelStyle = .roundedBezel
+        customFolderField.placeholderString = "Select a folder with MP3 files..."
         customFolderField.widthAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
         let browseBtn = NSButton(title: "Browse...", target: self, action: #selector(browseCustomFolder))
         browseBtn.bezelStyle = .rounded
@@ -506,6 +538,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    @objc private func previewSoundMode() {
+        guard let rawValue = soundModePopup.selectedItem?.representedObject as? String,
+              let mode = SoundMode(rawValue: rawValue) else { return }
+        let customPath = customFolderField.stringValue.isEmpty ? nil : customFolderField.stringValue
+        audioPlayer.previewSound(for: mode, customPath: customPath)
+    }
+
     @objc private func browseCustomFolder() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -520,8 +559,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Settings.shared.config.singleTapAppPath = singleTapPath
         Settings.shared.config.doubleTapAppPath = doubleTapPath
 
-        if let title = soundModePopup.selectedItem?.title,
-           let mode = SoundMode(rawValue: title.lowercased()) {
+        if let rawValue = soundModePopup.selectedItem?.representedObject as? String,
+           let mode = SoundMode(rawValue: rawValue) {
             Settings.shared.config.soundMode = mode
         }
 

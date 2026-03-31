@@ -139,6 +139,19 @@ class AudioPlayer {
         }
     }
 
+    /// Play a random sample from the given mode for preview.
+    func previewSound(for mode: SoundMode, customPath: String? = nil) {
+        let oldMode = soundMode
+        let oldCustom = customAudioPath
+        soundMode = mode
+        if mode == .custom { customAudioPath = customPath }
+        let files = audioFiles(for: mode)
+        soundMode = oldMode
+        customAudioPath = oldCustom
+        guard let file = files.randomElement() else { return }
+        playFile(file)
+    }
+
     /// Clear cached files (call when sound mode or custom path changes).
     func invalidateCache() {
         cachedFiles.removeAll()
