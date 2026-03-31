@@ -7,3 +7,4 @@ DerivedData/
 .DS_Store
 *.dmg
 .dmg-staging/
+Resources/dmg_background.png
